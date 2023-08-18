@@ -10,7 +10,6 @@ import (
 	"log"
 	"os"
 	"os/signal"
-	"sync"
 
 	"github.com/jroimartin/proxy"
 )
@@ -27,37 +26,21 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	if err := run(ctx, flag.Args()); err != nil {
+	pg := &proxy.Group{}
+
+	if err := run(ctx, pg, flag.Args()); err != nil {
 		log.Fatalf("error: %v", err)
 	}
 }
 
-// beforeAccept is set by tests to know when docker-gw is accepting
-// connections.
-var beforeAccept func()
-
-func run(ctx context.Context, args []string) error {
+func run(ctx context.Context, pg *proxy.Group, args []string) error {
 	streams, err := parseArgs(args)
 	if err != nil {
 		return fmt.Errorf("parse arguments: %v", err)
 	}
 
-	pg := &proxy.Group{}
-
-	var wg sync.WaitGroup
-	pg.BeforeAccept = func() error {
-		wg.Done()
-		return nil
-	}
-
-	wg.Add(len(streams))
 	errc := make(chan error)
 	go func() { errc <- pg.ListenAndServe(streams) }()
-	wg.Wait()
-
-	if beforeAccept != nil {
-		beforeAccept()
-	}
 
 	select {
 	case <-ctx.Done():
