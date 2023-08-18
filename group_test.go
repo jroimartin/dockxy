@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	"syscall"
 	"testing"
 )
 
@@ -106,6 +107,37 @@ func TestGroupListenAndServe_duplicated_stream(t *testing.T) {
 
 	if err := pg.Close(); err != nil {
 		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestGroupListenAndServe_duplicated_listener(t *testing.T) {
+	stream, err := ParseStream("tcp:127.0.0.1:0,tcp:127.0.0.1:1234")
+	if err != nil {
+		t.Fatalf("could not parse stream: %v", err)
+	}
+
+	pg, errc := newTestGroup([]Stream{stream})
+
+	p := pg.Proxy(stream)
+	if p == nil {
+		t.Fatalf("could not get proxy")
+	}
+
+	stream, err = ParseStream(fmt.Sprintf("tcp:%v,tcp:127.0.0.1:1234", p.Addr()))
+	if err != nil {
+		t.Fatalf("could not parse stream: %v", err)
+	}
+
+	if err := pg.ListenAndServe([]Stream{stream}); !errors.Is(err, syscall.EADDRINUSE) {
+		t.Errorf("unexpected error: got: %v, want: %v", err, syscall.EADDRINUSE)
+	}
+
+	if err := pg.Close(); err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	if err := <-errc; !errors.Is(err, ErrGroupClosed) {
+		t.Errorf("unexpected error: got: %v, want: %v", err, ErrGroupClosed)
 	}
 }
 
