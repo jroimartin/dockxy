@@ -135,6 +135,13 @@ func (pg *Group) closing() bool {
 	return pg.inClose.Load()
 }
 
+func (pg *Group) Proxy(stream Stream) *Proxy {
+	pg.mu.Lock()
+	defer pg.mu.Unlock()
+
+	return pg.proxies[stream]
+}
+
 // Stream represents a bidirectional data stream.
 type Stream struct {
 	listenNetwork, listenAddr string
