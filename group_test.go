@@ -141,6 +141,48 @@ func TestGroupBeforeAccept(t *testing.T) {
 	}
 }
 
+func TestGroupProxy(t *testing.T) {
+	stream, err := ParseStream("tcp:127.0.0.1:0,tcp:127.0.0.1:1234")
+	if err != nil {
+		t.Fatalf("could not parse stream: %v", err)
+	}
+
+	pg, errc := newTestGroup([]Stream{stream})
+
+	if p := pg.Proxy(stream); p == nil {
+		t.Errorf("could not get proxy")
+	}
+
+	if err := pg.Close(); err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	if err := <-errc; !errors.Is(err, ErrGroupClosed) {
+		t.Errorf("unexpected error: got: %v, want: %v", err, ErrGroupClosed)
+	}
+}
+
+func TestGroupProxy_after_close(t *testing.T) {
+	stream, err := ParseStream("tcp:127.0.0.1:0,tcp:127.0.0.1:1234")
+	if err != nil {
+		t.Fatalf("could not parse stream: %v", err)
+	}
+
+	pg, errc := newTestGroup([]Stream{stream})
+
+	if err := pg.Close(); err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	if p := pg.Proxy(stream); p != nil {
+		t.Errorf("unexpected proxy: %v", p)
+	}
+
+	if err := <-errc; !errors.Is(err, ErrGroupClosed) {
+		t.Errorf("unexpected error: got: %v, want: %v", err, ErrGroupClosed)
+	}
+}
+
 func TestParseStream(t *testing.T) {
 	tests := []struct {
 		name       string
