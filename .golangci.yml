@@ -1,0 +1,6 @@
+linters:
+  enable:
+    - gofmt
+    - whitespace
+    - godot
+    - revive # in place of deprecated golint
