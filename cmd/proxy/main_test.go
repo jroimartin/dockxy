@@ -5,19 +5,22 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"net"
+	"log"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
 	"sync"
 	"testing"
+
+	"github.com/jroimartin/proxy"
 )
+
+var discardLogger = log.New(io.Discard, "", 0)
 
 func TestRun(t *testing.T) {
 	const nproxies = 5
 
 	var args []string
-	resps := make(map[int][]byte)
+	resps := make(map[proxy.Stream][]byte)
 	for i := 0; i < nproxies; i++ {
 		resp := fmt.Sprintf("response from server %v", i)
 
@@ -30,26 +33,26 @@ func TestRun(t *testing.T) {
 		s := fmt.Sprintf("tcp:127.0.0.1:0,%v:%v", tsAddr.Network(), tsAddr)
 		args = append(args, s)
 
-		_, portstr, err := net.SplitHostPort(tsAddr.String())
+		stream, err := proxy.ParseStream(s)
 		if err != nil {
-			t.Fatalf("could not split host port: %v", err)
+			t.Fatalf("could not parse stream %q: %v", s, err)
 		}
 
-		port, err := strconv.Atoi(portstr)
-		if err != nil {
-			t.Fatalf("invalid port %q: %v", portstr, err)
-		}
-
-		resps[port] = []byte(resp)
+		resps[stream] = []byte(resp)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	errc := waitRun(ctx, args)
+	pg, errc := waitRun(ctx, args)
 
-	for port, want := range resps {
-		resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%v", port))
+	for stream, want := range resps {
+		p := pg.Proxy(stream)
+		if p == nil {
+			t.Fatalf("no proxy for %v", stream)
+		}
+
+		resp, err := http.Get(fmt.Sprintf("http://%v", p.Addr()))
 		if err != nil {
 			t.Fatalf("HTTP GET request error: %v", err)
 		}
@@ -77,20 +80,24 @@ func TestRun(t *testing.T) {
 }
 
 func TestRun_invalid_arg(t *testing.T) {
-	if err := run(context.Background(), []string{"tcp::0"}); err == nil {
+	if err := run(context.Background(), nil, []string{"tcp::0"}); err == nil {
 		t.Fatalf("run returned nil error")
 	}
 }
 
-func waitRun(ctx context.Context, args []string) <-chan error {
+func waitRun(ctx context.Context, args []string) (*proxy.Group, <-chan error) {
+	pg := &proxy.Group{ErrorLog: discardLogger}
+
 	var wg sync.WaitGroup
+	pg.BeforeAccept = func() error {
+		wg.Done()
+		return nil
+	}
 
-	beforeAccept = wg.Done
-
+	wg.Add(len(args))
 	errc := make(chan error)
-	wg.Add(1)
-	go func() { errc <- run(ctx, args) }()
+	go func() { errc <- run(ctx, pg, args) }()
 	wg.Wait()
 
-	return errc
+	return pg, errc
 }
