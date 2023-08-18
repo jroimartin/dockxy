@@ -3,6 +3,7 @@ package proxy
 import (
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -21,6 +22,10 @@ var (
 
 // Group represents a group of proxy servers.
 type Group struct {
+	// ErrorLog specifies an optional logger for errors. If nil,
+	// logging is done via the log package's standard logger.
+	ErrorLog *log.Logger
+
 	// BeforeAccept is called for every proxy once its listener is
 	// ready, just before accepting connections.
 	BeforeAccept func() error
@@ -69,7 +74,7 @@ func (pg *Group) ListenAndServe(streams []Stream) error {
 }
 
 func (pg *Group) handleStream(stream Stream) error {
-	p := &Proxy{}
+	p := &Proxy{ErrorLog: pg.ErrorLog}
 
 	if err := pg.trackProxy(stream, p, true); err != nil {
 		return err
