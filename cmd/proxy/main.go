@@ -39,8 +39,7 @@ func run(ctx context.Context, pg *proxy.Group, args []string) error {
 		return fmt.Errorf("parse arguments: %v", err)
 	}
 
-	errc := make(chan error)
-	go func() { errc <- pg.ListenAndServe(streams) }()
+	errc := pg.ListenAndServe(streams)
 
 	select {
 	case <-ctx.Done():

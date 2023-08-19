@@ -84,7 +84,7 @@ func TestGroupListenAndServe_after_close(t *testing.T) {
 		t.Errorf("unexpected error: got: %v, want: %v", err, ErrGroupClosed)
 	}
 
-	if err := pg.ListenAndServe([]Stream{stream}); !errors.Is(err, ErrGroupClosed) {
+	if err := <-pg.ListenAndServe([]Stream{stream}); !errors.Is(err, ErrGroupClosed) {
 		t.Errorf("unexpected error: got: %v, want: %v", err, ErrGroupClosed)
 	}
 }
@@ -101,7 +101,7 @@ func TestGroupListenAndServe_duplicated_stream(t *testing.T) {
 
 	pg := &Group{ErrorLog: discardLogger}
 
-	if err := pg.ListenAndServe([]Stream{stream1, stream2, stream1}); !errors.Is(err, ErrDuplicatedStream) {
+	if err := <-pg.ListenAndServe([]Stream{stream1, stream2, stream1}); !errors.Is(err, ErrDuplicatedStream) {
 		t.Errorf("unexpected error: got: %v, want: %v", err, ErrDuplicatedStream)
 	}
 
@@ -128,7 +128,7 @@ func TestGroupListenAndServe_duplicated_listener(t *testing.T) {
 		t.Fatalf("could not parse stream: %v", err)
 	}
 
-	if err := pg.ListenAndServe([]Stream{stream}); !errors.Is(err, syscall.EADDRINUSE) {
+	if err := <-pg.ListenAndServe([]Stream{stream}); !errors.Is(err, syscall.EADDRINUSE) {
 		t.Errorf("unexpected error: got: %v, want: %v", err, syscall.EADDRINUSE)
 	}
 
@@ -164,7 +164,7 @@ func TestGroupBeforeAccept(t *testing.T) {
 		return wantErr
 	}
 
-	if err := pg.ListenAndServe([]Stream{stream}); !errors.Is(err, wantErr) {
+	if err := <-pg.ListenAndServe([]Stream{stream}); !errors.Is(err, wantErr) {
 		t.Errorf("unexpected error: got: %v, want: %v", err, wantErr)
 	}
 
@@ -289,9 +289,8 @@ func newTestGroup(streams []Stream) (*Group, <-chan error) {
 		return nil
 	}
 
-	errc := make(chan error)
 	wg.Add(len(streams))
-	go func() { errc <- pg.ListenAndServe(streams) }()
+	errc := pg.ListenAndServe(streams)
 	wg.Wait()
 
 	return pg, errc
