@@ -12,7 +12,7 @@ import (
 var (
 	// ErrGroupClosed is returned by the *Group.ListenAndServe
 	// method after a call to *Group.Close.
-	ErrGroupClosed = errors.New("proxy group closed")
+	ErrGroupClosed = errors.New("Group closed")
 
 	// ErrDuplicatedStream is returned by the
 	// *Group.ListenAndServe method when it is called with
