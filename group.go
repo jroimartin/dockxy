@@ -10,8 +10,8 @@ import (
 )
 
 var (
-	// ErrGroupClosed is returned by the *Group.ListenAndServe
-	// method after a call to *Group.Close.
+	// ErrGroupClosed is sent to the channel returned by the
+	// *Group.ListenAndServe method after a call to *Group.Close.
 	ErrGroupClosed = errors.New("Group closed")
 
 	// ErrDuplicatedStream is returned by the
@@ -38,17 +38,22 @@ type Group struct {
 	proxiesGroup sync.WaitGroup
 }
 
-// ListenAndServe established the specified data streams.
-func (pg *Group) ListenAndServe(streams []Stream) error {
+// ListenAndServe established the specified data streams. The returned
+// channel can be used to receive the errors coming from the [Group]
+// and the underneath [Proxy]'s.
+func (pg *Group) ListenAndServe(streams []Stream) <-chan error {
+	errc := make(chan error)
+
 	if pg.closing() {
-		return ErrGroupClosed
+		go func() { errc <- ErrGroupClosed }()
+		return errc
 	}
 
 	if err := validateStreams(streams); err != nil {
-		return fmt.Errorf("stream validation: %w", err)
+		go func() { errc <- fmt.Errorf("stream validation: %w", err) }()
+		return errc
 	}
 
-	errc := make(chan error)
 	go func() {
 		var wg sync.WaitGroup
 		for _, stream := range streams {
@@ -56,21 +61,17 @@ func (pg *Group) ListenAndServe(streams []Stream) error {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				errc <- pg.handleStream(stream)
+				if err := pg.handleStream(stream); err != nil {
+					errc <- err
+				}
 			}()
 		}
 		wg.Wait()
+		errc <- ErrGroupClosed
 		close(errc)
 	}()
 
-	var errs []error
-	for err := range errc {
-		errs = append(errs, err)
-	}
-	if err := errors.Join(errs...); err != nil {
-		return err
-	}
-	return ErrGroupClosed
+	return errc
 }
 
 func (pg *Group) handleStream(stream Stream) error {
