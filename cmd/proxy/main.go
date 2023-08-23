@@ -1,5 +1,21 @@
 // Proxy establishes multiple bidirectional data streams between
 // different network types.
+//
+// Usage:
+//
+//	proxy streams
+//
+// Streams have the following format:
+//
+//	<listen address>,<dial address>
+//
+// Example:
+//
+//	tcp:localhost:6006,unix:/path/to/socket
+//
+// This creates a proxy that listens on the TCP address localhost:6060
+// and establishes a bidirectional data stream with the Unix address
+// /path/to/socket.
 package main
 
 import (
@@ -71,16 +87,17 @@ func parseArgs(args []string) ([]proxy.Stream, error) {
 func usage() {
 	fmt.Fprintf(os.Stderr, "usage: proxy streams\n")
 	fmt.Fprintf(os.Stderr, `
-Streams are specified using the format <listener>,<target>.
+Streams have the following format:
+
+	<listen address>,<dial address>
 
 Example:
 
-	proxy tcp:localhost:1111,unix:/first/socket tcp::2222,tcp:example.com:3333
+	tcp:localhost:6006,unix:/path/to/socket
 
-The previous command will create two proxies. The first one listens on
-localhost:1111 and forwards traffic to the Unix socket /first/socket.
-The second proxy listens on 0.0.0.0:2222 and forwards traffic to
-example.com:3333.
+This creates a proxy that listens on the TCP address localhost:6060
+and establishes a bidirectional data stream with the Unix address
+/path/to/socket.
 `)
 	flag.PrintDefaults()
 }
