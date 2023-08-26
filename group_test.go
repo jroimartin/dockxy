@@ -37,7 +37,11 @@ func TestGroupListenAndServe(t *testing.T) {
 
 	pg, errc := newTestGroup(streams)
 
-	for s, p := range pg.proxies {
+	pg.mu.Lock()
+	proxies := pg.proxies
+	pg.mu.Unlock()
+
+	for s, p := range proxies {
 		resp, err := http.Get("http://" + p.Addr().String())
 		if err != nil {
 			t.Fatalf("HTTP GET request error: %v", err)
