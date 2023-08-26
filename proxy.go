@@ -39,9 +39,10 @@ type Proxy struct {
 
 	inClose atomic.Bool
 
-	mu            sync.Mutex // guards following.
-	conn          map[net.Conn]struct{}
-	listener      net.Listener
+	mu       sync.Mutex
+	conn     map[net.Conn]struct{}
+	listener net.Listener
+
 	listenerGroup sync.WaitGroup
 }
 
@@ -102,16 +103,12 @@ func (p *Proxy) serve(listenConn net.Conn, dialNetwork, dialAddress string) {
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
-		if _, err := io.Copy(dialConn, listenConn); err != nil {
-			p.logf("proxy: copy error: listenConn->dialConn: %v", err)
-		}
+		io.Copy(dialConn, listenConn) //nolint:errcheck
 		dialConn.Close()
 		wg.Done()
 	}()
 	go func() {
-		if _, err := io.Copy(listenConn, dialConn); err != nil {
-			p.logf("proxy: copy error: dialConn->listenConn: %v", err)
-		}
+		io.Copy(listenConn, dialConn) //nolint:errcheck
 		listenConn.Close()
 		wg.Done()
 	}()
@@ -120,6 +117,13 @@ func (p *Proxy) serve(listenConn net.Conn, dialNetwork, dialAddress string) {
 
 // Addr returns the network address of the internal [net.Listener].
 func (p *Proxy) Addr() net.Addr {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.listener == nil {
+		return nil
+	}
+
 	return p.listener.Addr()
 }
 

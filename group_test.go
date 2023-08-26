@@ -37,7 +37,11 @@ func TestGroupListenAndServe(t *testing.T) {
 
 	pg, errc := newTestGroup(streams)
 
-	for s, p := range pg.proxies {
+	pg.mu.Lock()
+	proxies := pg.proxies
+	pg.mu.Unlock()
+
+	for s, p := range proxies {
 		resp, err := http.Get("http://" + p.Addr().String())
 		if err != nil {
 			t.Fatalf("HTTP GET request error: %v", err)
@@ -99,7 +103,7 @@ func TestGroupListenAndServe_duplicated_stream(t *testing.T) {
 		t.Fatalf("could not parse stream: %v", err)
 	}
 
-	pg := &Group{ErrorLog: discardLogger}
+	pg := &Group{}
 
 	if err := <-pg.ListenAndServe([]Stream{stream1, stream2, stream1}); !errors.Is(err, ErrDuplicatedStream) {
 		t.Errorf("unexpected error: got: %v, want: %v", err, ErrDuplicatedStream)
@@ -142,7 +146,7 @@ func TestGroupListenAndServe_duplicated_listener(t *testing.T) {
 }
 
 func TestGroupClose_twice(t *testing.T) {
-	pg := &Group{ErrorLog: discardLogger}
+	pg := &Group{}
 
 	for i := 0; i < 2; i++ {
 		if err := pg.Close(); err != nil {
@@ -159,7 +163,7 @@ func TestGroupBeforeAccept(t *testing.T) {
 		t.Fatalf("could not parse stream: %v", err)
 	}
 
-	pg := &Group{ErrorLog: discardLogger}
+	pg := &Group{}
 	pg.BeforeAccept = func() error {
 		return wantErr
 	}
@@ -281,7 +285,7 @@ func TestParseStream(t *testing.T) {
 }
 
 func newTestGroup(streams []Stream) (*Group, <-chan error) {
-	pg := &Group{ErrorLog: discardLogger}
+	pg := &Group{}
 
 	var wg sync.WaitGroup
 	pg.BeforeAccept = func() error {

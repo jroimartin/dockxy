@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -13,8 +12,6 @@ import (
 
 	"github.com/jroimartin/proxy"
 )
-
-var discardLogger = log.New(io.Discard, "", 0)
 
 func TestRun(t *testing.T) {
 	const nproxies = 5
@@ -86,7 +83,7 @@ func TestRun_invalid_arg(t *testing.T) {
 }
 
 func waitRun(ctx context.Context, args []string) (*proxy.Group, <-chan error) {
-	pg := &proxy.Group{ErrorLog: discardLogger}
+	pg := &proxy.Group{}
 
 	var wg sync.WaitGroup
 	pg.BeforeAccept = func() error {
