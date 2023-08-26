@@ -5,14 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/http/httptest"
 	"sync"
 	"testing"
 )
-
-var discardLogger = log.New(io.Discard, "", 0)
 
 func TestProxyListenAndServe(t *testing.T) {
 	want := "Test Response Body"
@@ -86,7 +83,7 @@ func TestProxyListenAndServe_after_close(t *testing.T) {
 }
 
 func TestProxyListenAndServe_after_close_without_listening(t *testing.T) {
-	p := &Proxy{ErrorLog: discardLogger}
+	p := &Proxy{}
 
 	if err := p.Close(); err != ErrProxyNotListening {
 		t.Errorf("unexpected error: got: %v, want: %v", err, ErrProxyNotListening)
@@ -114,7 +111,7 @@ func TestProxyServe_after_close(t *testing.T) {
 }
 
 func TestProxyClose_without_listening(t *testing.T) {
-	p := &Proxy{ErrorLog: discardLogger}
+	p := &Proxy{}
 
 	if err := p.Close(); err != ErrProxyNotListening {
 		t.Errorf("unexpected error: got: %v, want: %v", err, ErrProxyNotListening)
@@ -140,7 +137,7 @@ func TestProxyClose_twice(t *testing.T) {
 func TestProxyBeforeAccept(t *testing.T) {
 	wantErr := errors.New("BeforeAccept error")
 
-	p := &Proxy{ErrorLog: discardLogger}
+	p := &Proxy{}
 	p.BeforeAccept = func() error {
 		return wantErr
 	}
@@ -155,7 +152,7 @@ func TestProxyBeforeAccept(t *testing.T) {
 }
 
 func newTestProxy(listenNetwork, listenAddr, dialNetwork, dialAddr string) (*Proxy, <-chan error) {
-	p := &Proxy{ErrorLog: discardLogger}
+	p := &Proxy{}
 
 	var wg sync.WaitGroup
 	p.BeforeAccept = func() error {
