@@ -102,16 +102,12 @@ func (p *Proxy) serve(listenConn net.Conn, dialNetwork, dialAddress string) {
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
-		if _, err := io.Copy(dialConn, listenConn); err != nil {
-			p.logf("proxy: copy error: listenConn->dialConn: %v", err)
-		}
+		io.Copy(dialConn, listenConn) //nolint:errcheck
 		dialConn.Close()
 		wg.Done()
 	}()
 	go func() {
-		if _, err := io.Copy(listenConn, dialConn); err != nil {
-			p.logf("proxy: copy error: dialConn->listenConn: %v", err)
-		}
+		io.Copy(listenConn, dialConn) //nolint:errcheck
 		listenConn.Close()
 		wg.Done()
 	}()
