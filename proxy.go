@@ -115,7 +115,8 @@ func (p *Proxy) serve(listenConn net.Conn, dialNetwork, dialAddress string) {
 	wg.Wait()
 }
 
-// Addr returns the network address of the internal [net.Listener].
+// Addr returns the network address of the internal [net.Listener]. It
+// returns nil if the proxy is not listening.
 func (p *Proxy) Addr() net.Addr {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -123,7 +124,6 @@ func (p *Proxy) Addr() net.Addr {
 	if p.listener == nil {
 		return nil
 	}
-
 	return p.listener.Addr()
 }
 
