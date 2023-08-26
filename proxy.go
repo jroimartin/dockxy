@@ -39,9 +39,10 @@ type Proxy struct {
 
 	inClose atomic.Bool
 
-	mu            sync.Mutex // guards following.
-	conn          map[net.Conn]struct{}
-	listener      net.Listener
+	mu       sync.Mutex
+	conn     map[net.Conn]struct{}
+	listener net.Listener
+
 	listenerGroup sync.WaitGroup
 }
 
@@ -116,6 +117,13 @@ func (p *Proxy) serve(listenConn net.Conn, dialNetwork, dialAddress string) {
 
 // Addr returns the network address of the internal [net.Listener].
 func (p *Proxy) Addr() net.Addr {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.listener == nil {
+		return nil
+	}
+
 	return p.listener.Addr()
 }
 

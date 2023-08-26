@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -148,6 +149,47 @@ func TestProxyBeforeAccept(t *testing.T) {
 
 	if err := p.Close(); !errors.Is(err, ErrProxyNotListening) {
 		t.Errorf("unexpected error: got: %v, want: %v", err, ErrProxyNotListening)
+	}
+}
+
+func TestProxyAddr(t *testing.T) {
+	p := &Proxy{}
+
+	if addr := p.Addr(); addr != nil {
+		t.Errorf("Unexpected address: %v", addr)
+	}
+
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen error: %v", err)
+	}
+	want := l.Addr()
+
+	var wg sync.WaitGroup
+	p.BeforeAccept = func() error {
+		wg.Done()
+		return nil
+	}
+
+	errc := make(chan error)
+	wg.Add(1)
+	go func() { errc <- p.Serve(l, "tcp", "127.0.0.1:1234") }()
+	wg.Wait()
+
+	if got := p.Addr(); got != want {
+		t.Errorf("unexpected address: got: %v, want: %v", got, want)
+	}
+
+	if err := p.Close(); err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	if addr := p.Addr(); addr != nil {
+		t.Errorf("Unexpected address: %v", addr)
+	}
+
+	if err := <-errc; !errors.Is(err, ErrProxyClosed) {
+		t.Errorf("unexpected error: got: %v, want: %v", err, ErrProxyClosed)
 	}
 }
 
