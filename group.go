@@ -38,7 +38,7 @@ type Group struct {
 	proxiesGroup sync.WaitGroup
 }
 
-// ListenAndServe established the specified data streams. The returned
+// ListenAndServe establishes the specified data streams. The returned
 // channel can be used to receive the errors coming from the [Group]
 // and the underneath [Proxy]'s.
 func (pg *Group) ListenAndServe(streams []Stream) <-chan error {
