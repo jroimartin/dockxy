@@ -12,7 +12,7 @@ import (
 	"testing"
 )
 
-func TestGroupListenAndServe(t *testing.T) {
+func TestGroup_ListenAndServe(t *testing.T) {
 	const nproxies = 5
 
 	var streams []Stream
@@ -72,7 +72,7 @@ func TestGroupListenAndServe(t *testing.T) {
 	}
 }
 
-func TestGroupListenAndServe_after_close(t *testing.T) {
+func TestGroup_ListenAndServe_after_close(t *testing.T) {
 	stream, err := ParseStream("tcp:127.0.0.1:0,tcp:127.0.0.1:1234")
 	if err != nil {
 		t.Fatalf("could not parse stream: %v", err)
@@ -93,7 +93,7 @@ func TestGroupListenAndServe_after_close(t *testing.T) {
 	}
 }
 
-func TestGroupListenAndServe_duplicated_stream(t *testing.T) {
+func TestGroup_ListenAndServe_duplicated_stream(t *testing.T) {
 	stream1, err := ParseStream("tcp:127.0.0.1:0,tcp:127.0.0.1:1234")
 	if err != nil {
 		t.Fatalf("could not parse stream: %v", err)
@@ -114,7 +114,7 @@ func TestGroupListenAndServe_duplicated_stream(t *testing.T) {
 	}
 }
 
-func TestGroupListenAndServe_duplicated_listener(t *testing.T) {
+func TestGroup_ListenAndServe_duplicated_listener(t *testing.T) {
 	stream, err := ParseStream("tcp:127.0.0.1:0,tcp:127.0.0.1:1234")
 	if err != nil {
 		t.Fatalf("could not parse stream: %v", err)
@@ -145,7 +145,7 @@ func TestGroupListenAndServe_duplicated_listener(t *testing.T) {
 	}
 }
 
-func TestGroupClose_twice(t *testing.T) {
+func TestGroup_Close_twice(t *testing.T) {
 	pg := &Group{}
 
 	for i := 0; i < 2; i++ {
@@ -155,7 +155,7 @@ func TestGroupClose_twice(t *testing.T) {
 	}
 }
 
-func TestGroupBeforeAccept(t *testing.T) {
+func TestGroup_BeforeAccept(t *testing.T) {
 	wantErr := errors.New("BeforeAccept error")
 
 	stream, err := ParseStream("tcp:127.0.0.1:0,tcp:127.0.0.1:1234")
@@ -177,7 +177,7 @@ func TestGroupBeforeAccept(t *testing.T) {
 	}
 }
 
-func TestGroupProxy(t *testing.T) {
+func TestGroup_Proxy(t *testing.T) {
 	stream, err := ParseStream("tcp:127.0.0.1:0,tcp:127.0.0.1:1234")
 	if err != nil {
 		t.Fatalf("could not parse stream: %v", err)
@@ -198,7 +198,7 @@ func TestGroupProxy(t *testing.T) {
 	}
 }
 
-func TestGroupProxy_after_close(t *testing.T) {
+func TestGroup_Proxy_after_close(t *testing.T) {
 	stream, err := ParseStream("tcp:127.0.0.1:0,tcp:127.0.0.1:1234")
 	if err != nil {
 		t.Fatalf("could not parse stream: %v", err)
