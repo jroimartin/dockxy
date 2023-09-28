@@ -136,6 +136,7 @@ func (pg *Group) closing() bool {
 	return pg.inClose.Load()
 }
 
+// Proxy returns the proxy that handles the provided stream.
 func (pg *Group) Proxy(stream Stream) *Proxy {
 	pg.mu.Lock()
 	defer pg.mu.Unlock()

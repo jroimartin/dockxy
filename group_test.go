@@ -59,7 +59,7 @@ func TestGroup_ListenAndServe(t *testing.T) {
 
 		want := resps[s]
 		if !bytes.Equal(got, want) {
-			t.Errorf("unexpected reponse: got: %s, want: %s", got, want)
+			t.Errorf("unexpected response: got: %s, want: %s", got, want)
 		}
 	}
 

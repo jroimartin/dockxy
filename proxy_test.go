@@ -39,7 +39,7 @@ func TestProxy_ListenAndServe(t *testing.T) {
 	}
 
 	if !bytes.Equal(got, []byte(want)) {
-		t.Errorf("unexpected reponse: got: %s, want: %s", got, want)
+		t.Errorf("unexpected response: got: %s, want: %s", got, want)
 	}
 
 	if err := p.Close(); err != nil {
