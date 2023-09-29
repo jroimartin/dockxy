@@ -41,16 +41,11 @@ type Group struct {
 // ListenAndServe establishes the specified data streams. The returned
 // channel can be used to receive the errors coming from the [Group]
 // and the underneath [Proxy]'s.
-func (pg *Group) ListenAndServe(streams []Stream) <-chan error {
+func (pg *Group) ListenAndServe(streams ...Stream) <-chan error {
 	errc := make(chan error)
 
 	if pg.closing() {
 		go func() { errc <- ErrGroupClosed }()
-		return errc
-	}
-
-	if err := validateStreams(streams); err != nil {
-		go func() { errc <- fmt.Errorf("stream validation: %w", err) }()
 		return errc
 	}
 
@@ -101,6 +96,12 @@ func (pg *Group) trackProxy(stream Stream, p *Proxy, add bool) error {
 		if pg.closing() {
 			return ErrGroupClosed
 		}
+
+		_, dup := pg.proxies[stream]
+		if dup {
+			return ErrDuplicatedStream
+		}
+
 		pg.proxies[stream] = p
 		pg.proxiesGroup.Add(1)
 	} else {
@@ -136,6 +137,7 @@ func (pg *Group) closing() bool {
 	return pg.inClose.Load()
 }
 
+// Proxy returns the proxy that handles the provided stream.
 func (pg *Group) Proxy(stream Stream) *Proxy {
 	pg.mu.Lock()
 	defer pg.mu.Unlock()
@@ -194,17 +196,6 @@ func parseAddr(s string) (network, addr string, err error) {
 	}
 
 	return network, addr, nil
-}
-
-func validateStreams(streams []Stream) error {
-	for i := 0; i < len(streams); i++ {
-		for j := i + 1; j < len(streams); j++ {
-			if streams[i] == streams[j] {
-				return ErrDuplicatedStream
-			}
-		}
-	}
-	return nil
 }
 
 // String returns the string representation of the stream.

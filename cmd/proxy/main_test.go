@@ -65,7 +65,7 @@ func TestRun(t *testing.T) {
 		}
 
 		if !bytes.Equal(got, want) {
-			t.Errorf("unexpected reponse: got: %s, want: %s", got, want)
+			t.Errorf("unexpected response: got: %s, want: %s", got, want)
 		}
 	}
 
