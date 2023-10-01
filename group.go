@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"strings"
 	"sync"
 	"sync/atomic"
 )
@@ -26,27 +25,31 @@ type Group struct {
 	// logging is done via the log package's standard logger.
 	ErrorLog *log.Logger
 
-	// BeforeAccept is called for every proxy once its listener is
-	// ready, just before accepting connections.
-	BeforeAccept func() error
-
-	inClose atomic.Bool
+	inClose      atomic.Bool
+	proxiesGroup sync.WaitGroup
 
 	mu      sync.Mutex
 	proxies map[Stream]*Proxy
+}
 
-	proxiesGroup sync.WaitGroup
+// NewGroup initializes and returns a new [Group].
+func NewGroup() *Group {
+	return &Group{
+		proxies: make(map[Stream]*Proxy),
+	}
 }
 
 // ListenAndServe establishes the specified data streams. The returned
-// channel can be used to receive the errors coming from the [Group]
-// and the underneath [Proxy]'s.
-func (pg *Group) ListenAndServe(streams ...Stream) <-chan error {
+// [Event] channel can be used to receive events published by the
+// [Proxy]'s. The returned error channel can be used to receive the
+// errors coming from the [Group] and the [Proxy]'s.
+func (pg *Group) ListenAndServe(streams ...Stream) (<-chan Event, <-chan error) {
+	evc := make(chan Event)
 	errc := make(chan error)
 
 	if pg.closing() {
 		go func() { errc <- ErrGroupClosed }()
-		return errc
+		return evc, errc
 	}
 
 	go func() {
@@ -56,7 +59,7 @@ func (pg *Group) ListenAndServe(streams ...Stream) <-chan error {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				if err := pg.handleStream(stream); err != nil {
+				if err := pg.handleStream(stream, evc); err != nil {
 					errc <- err
 				}
 			}()
@@ -66,19 +69,25 @@ func (pg *Group) ListenAndServe(streams ...Stream) <-chan error {
 		close(errc)
 	}()
 
-	return errc
+	return evc, errc
 }
 
-func (pg *Group) handleStream(stream Stream) error {
-	p := &Proxy{ErrorLog: pg.ErrorLog}
+func (pg *Group) handleStream(stream Stream, events chan<- Event) error {
+	p := NewProxy()
+	p.ErrorLog = pg.ErrorLog
 
 	if err := pg.trackProxy(stream, p, true); err != nil {
 		return err
 	}
 	defer pg.trackProxy(stream, p, false) //nolint:errcheck
 
-	p.BeforeAccept = pg.BeforeAccept
-	if err := p.ListenAndServe(stream.listenNetwork, stream.listenAddr, stream.dialNetwork, stream.dialAddr); !errors.Is(err, ErrProxyClosed) {
+	go func() {
+		for ev := range p.Events() {
+			events <- ev
+		}
+	}()
+
+	if err := p.ListenAndServe(stream.ListenNetwork, stream.ListenAddr, stream.DialNetwork, stream.DialAddr); !errors.Is(err, ErrProxyClosed) {
 		return err
 	}
 	return nil
@@ -87,10 +96,6 @@ func (pg *Group) handleStream(stream Stream) error {
 func (pg *Group) trackProxy(stream Stream, p *Proxy, add bool) error {
 	pg.mu.Lock()
 	defer pg.mu.Unlock()
-
-	if pg.proxies == nil {
-		pg.proxies = make(map[Stream]*Proxy)
-	}
 
 	if add {
 		if pg.closing() {
@@ -135,70 +140,4 @@ func (pg *Group) closeProxies() error {
 
 func (pg *Group) closing() bool {
 	return pg.inClose.Load()
-}
-
-// Proxy returns the proxy that handles the provided stream.
-func (pg *Group) Proxy(stream Stream) *Proxy {
-	pg.mu.Lock()
-	defer pg.mu.Unlock()
-
-	return pg.proxies[stream]
-}
-
-// Stream represents a bidirectional data stream.
-type Stream struct {
-	listenNetwork, listenAddr string
-	dialNetwork, dialAddr     string
-}
-
-// ParseStream parses a string representing a bidirectional data
-// stream with the format <listener>,<target>.
-func ParseStream(s string) (Stream, error) {
-	sides := strings.Split(s, ",")
-	if len(sides) != 2 {
-		return Stream{}, fmt.Errorf("malformed stream %q", s)
-	}
-
-	listenNetwork, listenAddr, err := parseAddr(sides[0])
-	if err != nil {
-		return Stream{}, fmt.Errorf("malformed listen side %q: %w", sides[0], err)
-	}
-
-	dialNetwork, dialAddr, err := parseAddr(sides[1])
-	if err != nil {
-		return Stream{}, fmt.Errorf("malformed dial side %q: %w", sides[1], err)
-	}
-
-	stream := Stream{
-		listenNetwork: listenNetwork,
-		listenAddr:    listenAddr,
-		dialNetwork:   dialNetwork,
-		dialAddr:      dialAddr,
-	}
-
-	return stream, nil
-}
-
-func parseAddr(s string) (network, addr string, err error) {
-	i := strings.Index(s, ":")
-	if i < 0 {
-		return "", "", fmt.Errorf("malformed address")
-	}
-
-	network = s[:i]
-	if network == "" {
-		return "", "", errors.New("empty network")
-	}
-
-	addr = s[i+1:]
-	if addr == "" {
-		return "", "", errors.New("empty address")
-	}
-
-	return network, addr, nil
-}
-
-// String returns the string representation of the stream.
-func (stream Stream) String() string {
-	return fmt.Sprintf("%v:%v,%v:%v", stream.listenNetwork, stream.listenAddr, stream.dialNetwork, stream.dialAddr)
 }

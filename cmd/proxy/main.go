@@ -5,9 +5,10 @@
 //
 //	proxy streams
 //
-// Streams have the following format:
+// Streams is a space-separated list of streams. Each stream with the
+// format:
 //
-//	<listen address>,<dial address>
+//	<listen network>:<listen address>,<dial network>:<dial address>
 //
 // Example:
 //
@@ -42,20 +43,28 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	pg := &proxy.Group{}
+	pg := proxy.NewGroup()
 
-	if err := run(ctx, pg, flag.Args()); err != nil {
+	if err := run(ctx, pg, flag.Args(), nil); err != nil {
 		log.Fatalf("error: %v", err)
 	}
 }
 
-func run(ctx context.Context, pg *proxy.Group, args []string) error {
+func run(ctx context.Context, pg *proxy.Group, args []string, events chan<- proxy.Event) error {
 	streams, err := parseArgs(args)
 	if err != nil {
 		return fmt.Errorf("parse arguments: %v", err)
 	}
 
-	errc := pg.ListenAndServe(streams...)
+	evc, errc := pg.ListenAndServe(streams...)
+
+	if events != nil {
+		go func() {
+			for ev := range evc {
+				events <- ev
+			}
+		}()
+	}
 
 	select {
 	case <-ctx.Done():
