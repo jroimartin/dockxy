@@ -41,8 +41,9 @@ func NewGroup() *Group {
 
 // ListenAndServe establishes the specified data streams. The returned
 // [Event] channel can be used to receive events published by the
-// [Proxy]'s. The returned error channel can be used to receive the
-// errors coming from the [Group] and the [Proxy]'s.
+// [Proxy]'s that handle the provided data streams. The returned error
+// channel can be used to receive the errors coming from the [Group]
+// and the [Proxy]'s that handle the provided data streams.
 func (pg *Group) ListenAndServe(streams ...Stream) (<-chan Event, <-chan error) {
 	evc := make(chan Event)
 	errc := make(chan error)
