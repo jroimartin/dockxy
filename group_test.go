@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"syscall"
 	"testing"
 )
@@ -77,9 +78,7 @@ func TestGroup_ListenAndServe(t *testing.T) {
 		t.Errorf("unexpected error: %v", err)
 	}
 
-	if err := <-errc; !errors.Is(err, ErrGroupClosed) {
-		t.Errorf("unexpected error: got: %v, want: %v", err, ErrGroupClosed)
-	}
+	checkErrs(t, errc, ErrGroupClosed, 1)
 }
 
 func TestGroup_ListenAndServe_multiple_calls(t *testing.T) {
@@ -110,7 +109,8 @@ func TestGroup_ListenAndServe_multiple_calls(t *testing.T) {
 
 	pg := NewGroup()
 
-	var errcs []<-chan error
+	var wg sync.WaitGroup
+	errcMux := make(chan error)
 	pgStreams := make(map[string]string)
 	for i := 0; i < nproxies; i += batchsz {
 		sz := min(batchsz, len(streams)-i)
@@ -129,8 +129,19 @@ func TestGroup_ListenAndServe_multiple_calls(t *testing.T) {
 				break
 			}
 		}
-		errcs = append(errcs, errc)
+
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for err := range errc {
+				errcMux <- err
+			}
+		}()
 	}
+	go func() {
+		wg.Wait()
+		close(errcMux)
+	}()
 
 	for dialAddr, listenAddr := range pgStreams {
 		resp, err := http.Get("http://" + listenAddr)
@@ -158,11 +169,7 @@ func TestGroup_ListenAndServe_multiple_calls(t *testing.T) {
 		t.Errorf("unexpected error: %v", err)
 	}
 
-	for _, errc := range errcs {
-		if err := <-errc; !errors.Is(err, ErrGroupClosed) {
-			t.Errorf("unexpected error: got: %v, want: %v", err, ErrGroupClosed)
-		}
-	}
+	checkErrs(t, errcMux, ErrGroupClosed, (nproxies+batchsz-1)/batchsz)
 }
 
 func TestGroup_ListenAndServe_multiple_calls_one_stream(t *testing.T) {
@@ -184,6 +191,7 @@ func TestGroup_ListenAndServe_multiple_calls_one_stream(t *testing.T) {
 
 	pg := NewGroup()
 
+	var wg sync.WaitGroup
 	evcMux := make(chan Event)
 	errcMux := make(chan error)
 	for i := 0; i < ncalls; i++ {
@@ -193,12 +201,18 @@ func TestGroup_ListenAndServe_multiple_calls_one_stream(t *testing.T) {
 				evcMux <- ev
 			}
 		}()
+		wg.Add(1)
 		go func() {
+			defer wg.Done()
 			for err := range errc {
 				errcMux <- err
 			}
 		}()
 	}
+	go func() {
+		wg.Wait()
+		close(errcMux)
+	}()
 
 	waitBeforeAccept(evcMux, 1)
 
@@ -231,10 +245,31 @@ func TestGroup_ListenAndServe_multiple_calls_one_stream(t *testing.T) {
 		t.Errorf("unexpected error: %v", err)
 	}
 
-	for i := 0; i < ncalls; i++ {
-		if errors.Is(err, ErrGroupClosed) {
-			t.Errorf("unexpected error: got: %v, want: %v", err, ErrGroupClosed)
-		}
+	checkErrs(t, errcMux, ErrGroupClosed, 1)
+}
+
+func TestGroup_ListenAndServe_no_streams(t *testing.T) {
+	pg := NewGroup()
+	_, errc := pg.ListenAndServe()
+
+	err, ok := <-errc
+	if ok {
+		t.Errorf("channel should be closed")
+	}
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	if err := pg.Close(); err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	err, ok = <-errc
+	if ok {
+		t.Errorf("channel should be closed")
+	}
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
 	}
 }
 
@@ -245,19 +280,19 @@ func TestGroup_ListenAndServe_after_close(t *testing.T) {
 	}
 
 	pg := NewGroup()
-	_, errc := pg.ListenAndServe(stream)
+	evc, errc := pg.ListenAndServe(stream)
+
+	waitBeforeAccept(evc, 1)
 
 	if err := pg.Close(); err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
 
-	if err := <-errc; !errors.Is(err, ErrGroupClosed) {
-		t.Errorf("unexpected error: got: %v, want: %v", err, ErrGroupClosed)
-	}
+	checkErrs(t, errc, ErrGroupClosed, 1)
 
-	if _, errc := pg.ListenAndServe(stream); !errors.Is(<-errc, ErrGroupClosed) {
-		t.Errorf("unexpected error: got: %v, want: %v", err, ErrGroupClosed)
-	}
+	_, errc = pg.ListenAndServe(stream)
+
+	checkErrs(t, errc, ErrGroupClosed, 1)
 }
 
 func TestGroup_ListenAndServe_duplicated_stream(t *testing.T) {
@@ -284,11 +319,7 @@ func TestGroup_ListenAndServe_duplicated_stream(t *testing.T) {
 		t.Errorf("unexpected error: %v", err)
 	}
 
-	for err := range errc {
-		if !errors.Is(err, ErrGroupClosed) {
-			t.Errorf("unexpected error: got: %v, want: %v", err, ErrGroupClosed)
-		}
-	}
+	checkErrs(t, errc, ErrGroupClosed, 1)
 }
 
 func TestGroup_ListenAndServe_duplicated_listener(t *testing.T) {
@@ -321,9 +352,7 @@ func TestGroup_ListenAndServe_duplicated_listener(t *testing.T) {
 		t.Errorf("unexpected error: %v", err)
 	}
 
-	if err := <-errc; !errors.Is(err, ErrGroupClosed) {
-		t.Errorf("unexpected error: got: %v, want: %v", err, ErrGroupClosed)
-	}
+	checkErrs(t, errc, ErrGroupClosed, 1)
 }
 
 func TestGroup_Close_twice(t *testing.T) {
@@ -333,5 +362,18 @@ func TestGroup_Close_twice(t *testing.T) {
 		if err := pg.Close(); err != nil {
 			t.Errorf("unexpected error: %v", err)
 		}
+	}
+}
+
+func checkErrs(t *testing.T, errc <-chan error, wantErr error, wantN int) {
+	var n int
+	for err := range errc {
+		if !errors.Is(err, wantErr) {
+			t.Errorf("unexpected error: got: %v, want: %v", err, wantErr)
+		}
+		n++
+	}
+	if n != wantN {
+		t.Errorf("unexpected number of errors: got: %v, want: %v", n, wantN)
 	}
 }

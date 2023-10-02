@@ -48,7 +48,10 @@ func (pg *Group) ListenAndServe(streams ...Stream) (<-chan Event, <-chan error) 
 	errc := make(chan error)
 
 	if pg.closing() {
-		go func() { errc <- ErrGroupClosed }()
+		go func() {
+			errc <- ErrGroupClosed
+			close(errc)
+		}()
 		return evc, errc
 	}
 
@@ -65,7 +68,11 @@ func (pg *Group) ListenAndServe(streams ...Stream) (<-chan Event, <-chan error) 
 			}()
 		}
 		wg.Wait()
-		errc <- ErrGroupClosed
+
+		if pg.closing() {
+			errc <- ErrGroupClosed
+		}
+
 		close(errc)
 	}()
 

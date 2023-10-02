@@ -110,14 +110,14 @@ func (p *Proxy) serve(listenConn net.Conn, dialNetwork, dialAddress string) {
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
+		defer wg.Done()
 		io.Copy(dialConn, listenConn) //nolint:errcheck
 		dialConn.Close()
-		wg.Done()
 	}()
 	go func() {
+		defer wg.Done()
 		io.Copy(listenConn, dialConn) //nolint:errcheck
 		listenConn.Close()
-		wg.Done()
 	}()
 	wg.Wait()
 }
