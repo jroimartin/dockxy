@@ -43,42 +43,40 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	pg := proxy.NewGroup()
-
-	if err := run(ctx, pg, flag.Args(), nil); err != nil {
+	if err := run(ctx, flag.Args(), nil); err != nil {
 		log.Fatalf("error: %v", err)
 	}
 }
 
-func run(ctx context.Context, pg *proxy.Group, args []string, events chan<- proxy.Event) error {
+func run(ctx context.Context, args []string, events chan<- proxy.Event) error {
 	streams, err := parseArgs(args)
 	if err != nil {
 		return fmt.Errorf("parse arguments: %v", err)
 	}
 
-	evc, errc := pg.ListenAndServe(streams...)
+	pg := proxy.NewGroup()
+	batch := pg.ListenAndServe(streams...)
+	defer batch.Flush()
+	defer pg.Close()
 
-	if events != nil {
-		go func() {
-			for ev := range evc {
+	for {
+		select {
+		case <-ctx.Done():
+			if pg.Close(); err != nil {
+				log.Printf("error: close: %v", err)
+			}
+			if err := <-batch.Errors(); !errors.Is(err, proxy.ErrGroupClosed) {
+				return fmt.Errorf("listen and serve: %v", err)
+			}
+			return nil
+		case ev := <-batch.Events():
+			if events != nil {
 				events <- ev
 			}
-		}()
-	}
-
-	select {
-	case <-ctx.Done():
-		if err := pg.Close(); err != nil {
-			log.Printf("error: close: %v", err)
+		case err := <-batch.Errors():
+			return fmt.Errorf("proxy group returned unexpectedly: %v", err)
 		}
-	case err := <-errc:
-		return fmt.Errorf("proxy group returned unexpectedly: %v", err)
 	}
-
-	if err := <-errc; !errors.Is(err, proxy.ErrGroupClosed) {
-		return fmt.Errorf("listen and serve: %v", err)
-	}
-	return nil
 }
 
 func parseArgs(args []string) ([]proxy.Stream, error) {
