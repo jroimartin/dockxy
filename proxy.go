@@ -15,14 +15,14 @@ import (
 var (
 	// ErrProxyClosed is returned by the *Proxy.Serve and
 	// *Proxy.ListenAndServe methods after a call to *Proxy.Close.
+	// This error is also returned by *Proxy.Close if the Proxy
+	// has been closed.
 	ErrProxyClosed = errors.New("Proxy closed")
 
-	// ErrProxyListener is returned in the following
-	// circumstances:
-	//   - *Proxy.Close is called before the listener has been set
-	//     or after it has been closed.
-	//   - *Proxy.Serve or *Proxy.ListenAndServe is called after
-	//     the Proxy is already listening.
+	// ErrProxyListener is returned by the *Proxy.Serve or
+	// *Proxy.ListenAndServe methods when they are called after
+	// the Proxy is already listening. This error is also returned
+	// by *Proxy.Close if the listener has not been set.
 	ErrProxyListener = errors.New("Proxy listener error")
 )
 
@@ -32,20 +32,32 @@ type Proxy struct {
 	// logging is done via the log package's standard logger.
 	ErrorLog *log.Logger
 
-	inClose       atomic.Bool
-	listenerGroup sync.WaitGroup
-	evc           chan Event
+	inClose atomic.Bool
 
-	mu       sync.Mutex
-	conn     map[net.Conn]struct{}
-	listener net.Listener
+	// mu enforces the following:
+	//   - *Proxy.Close cannot be called twice.
+	//   - *Proxy.setListener cannot be called twice or after
+	//     *Proxy.Close is called.
+	//   - *Proxy.ListenAndServe and *Proxy.Serve cannot be called
+	//     twice (the listener cannot be set again) or after
+	//     *Proxy.Close is called.
+	//   - No more events are sent on evc after *Proxy.Close is
+	//     called.
+	//   - No more connections are handled after *Proxy.Close is
+	//     called.
+	mu          sync.Mutex
+	listener    net.Listener
+	listenGroup sync.WaitGroup
+	evc         chan Event
+	eventGroup  sync.WaitGroup
+	conn        map[net.Conn]struct{}
 }
 
 // NewProxy initializes and returns a new [Proxy].
 func NewProxy() *Proxy {
 	return &Proxy{
-		conn: make(map[net.Conn]struct{}),
 		evc:  make(chan Event),
+		conn: make(map[net.Conn]struct{}),
 	}
 }
 
@@ -53,13 +65,9 @@ func NewProxy() *Proxy {
 // and then calls [*Proxy.Serve] to start forwarding traffic to the
 // provided "dial network address".
 func (p *Proxy) ListenAndServe(listenNetwork, listenAddress, dialNetwork, dialAddress string) error {
-	if p.closing() {
-		return ErrProxyClosed
-	}
-
 	l, err := net.Listen(listenNetwork, listenAddress)
 	if err != nil {
-		return fmt.Errorf("proxy: listen %v:%v: %w", listenNetwork, listenAddress, err)
+		return fmt.Errorf("listen %v:%v: %w", listenNetwork, listenAddress, err)
 	}
 	return p.Serve(l, dialNetwork, dialAddress)
 }
@@ -67,10 +75,12 @@ func (p *Proxy) ListenAndServe(listenNetwork, listenAddress, dialNetwork, dialAd
 // Serve forwards traffic to the specified "dial network address". It
 // always returns a non-nil error and closes l.
 func (p *Proxy) Serve(l net.Listener, dialNetwork, dialAddress string) error {
-	if err := p.trackListener(l, true); err != nil {
-		return err
+	if err := p.setListener(l); err != nil {
+		return fmt.Errorf("set listener: %w", err)
 	}
-	defer p.trackListener(l, false) //nolint:errcheck
+
+	p.listenGroup.Add(1)
+	defer p.listenGroup.Done()
 
 	p.sendEvent(Event{
 		Kind: KindBeforeAccept,
@@ -88,24 +98,49 @@ func (p *Proxy) Serve(l net.Listener, dialNetwork, dialAddress string) error {
 			if p.closing() {
 				return ErrProxyClosed
 			}
-			return fmt.Errorf("proxy: accept %v: %w", l.Addr(), err)
+			return fmt.Errorf("accept %v: %w", l.Addr(), err)
 		}
 		go p.serve(listenConn, dialNetwork, dialAddress)
 	}
 }
 
+// setListener sets the listener.
+func (p *Proxy) setListener(l net.Listener) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.closing() {
+		return ErrProxyClosed
+	}
+
+	if p.listener != nil {
+		return ErrProxyListener
+	}
+
+	p.listener = l
+	return nil
+}
+
+// serve handles a connection.
 func (p *Proxy) serve(listenConn net.Conn, dialNetwork, dialAddress string) {
-	p.trackConn(listenConn, true)
-	defer p.trackConn(listenConn, false)
+	defer listenConn.Close()
+
+	if err := p.trackConn(listenConn, true); err != nil {
+		return
+	}
+	defer p.trackConn(listenConn, false) //nolint:errcheck
 
 	dialConn, err := net.Dial(dialNetwork, dialAddress)
 	if err != nil {
 		p.logf("proxy: error dialing %v:%v: %v", dialNetwork, dialAddress, err)
-		listenConn.Close()
 		return
 	}
-	p.trackConn(dialConn, true)
-	defer p.trackConn(dialConn, false)
+	defer dialConn.Close()
+
+	if err := p.trackConn(dialConn, true); err != nil {
+		return
+	}
+	defer p.trackConn(dialConn, false) //nolint:errcheck
 
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -122,6 +157,24 @@ func (p *Proxy) serve(listenConn net.Conn, dialNetwork, dialAddress string) {
 	wg.Wait()
 }
 
+// trackConn tracks the specified connection. If add is true, it is
+// added to the connection list. Otherwise, it is removed from the
+// connection list.
+func (p *Proxy) trackConn(conn net.Conn, add bool) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if add {
+		if p.closing() {
+			return ErrProxyClosed
+		}
+		p.conn[conn] = struct{}{}
+	} else {
+		delete(p.conn, conn)
+	}
+	return nil
+}
+
 // Events returns an [Event] channel that can be used to receive
 // events published by the [Proxy].
 func (p *Proxy) Events() <-chan Event {
@@ -129,75 +182,89 @@ func (p *Proxy) Events() <-chan Event {
 }
 
 // Close closes the internal [net.Listener] and any active connection.
+// After calling [*Proxy.Close] all the events in the channel returned
+// by [*Proxy.Events] should be consumed to avoid leaking resources.
+// [*Proxy.Flush] is a helper for this.
 func (p *Proxy) Close() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.closing() {
+		return ErrProxyClosed
+	}
+
 	p.inClose.Store(true)
 
 	err := p.closeListener()
-	p.listenerGroup.Wait()
+	p.listenGroup.Wait()
 	p.closeConn()
+
+	// There can be events waiting for being consumed. So, create
+	// a goroutine to wait until all of them are sent before
+	// closing the channel.
+	go p.closeEvents()
 
 	return err
 }
 
-func (p *Proxy) trackListener(l net.Listener, set bool) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	if set {
-		if p.closing() {
-			return ErrProxyClosed
-		}
-		if p.listener != nil {
-			return ErrProxyListener
-		}
-		p.listener = l
-		p.listenerGroup.Add(1)
-	} else {
-		p.listener = nil
-		p.listenerGroup.Done()
-	}
-	return nil
-}
-
+// closeListener closes the listener if it has been set. This function
+// is called from [*Proxy.Close], so it expects Proxy.mu to be held.
 func (p *Proxy) closeListener() error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
 	if p.listener == nil {
 		return ErrProxyListener
 	}
 	return p.listener.Close()
 }
 
-func (p *Proxy) trackConn(conn net.Conn, add bool) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	if add {
-		p.conn[conn] = struct{}{}
-	} else {
-		delete(p.conn, conn)
-	}
-}
-
+// closeConn closes all the connections and deletes them from the
+// connection list. This function is called from [*Proxy.Close], so it
+// expects Proxy.mu to be held.
 func (p *Proxy) closeConn() {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
 	for c := range p.conn {
 		c.Close()
 		delete(p.conn, c)
 	}
 }
 
+// closeEvents closes de events channel after all the events have been
+// consumed.
+func (p *Proxy) closeEvents() {
+	p.eventGroup.Wait()
+	close(p.evc)
+}
+
+// closing returns whether the proxy has been closed.
 func (p *Proxy) closing() bool {
 	return p.inClose.Load()
 }
 
+// sendEvent sends an event on the events channel.
 func (p *Proxy) sendEvent(ev Event) {
-	go func() { p.evc <- ev }()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.closing() {
+		return
+	}
+
+	p.eventGroup.Add(1)
+	go func() {
+		defer p.eventGroup.Done()
+		p.evc <- ev
+	}()
 }
 
+// Flush discards all the events in the channel returned by
+// [*Proxy.Events].
+func (p *Proxy) Flush() {
+	for {
+		if _, ok := <-p.evc; !ok {
+			return
+		}
+	}
+}
+
+// logf logs the specified message using Proxy.ErrorLog.
 func (p *Proxy) logf(format string, args ...any) {
 	if p.ErrorLog != nil {
 		p.ErrorLog.Printf(format, args...)
@@ -245,15 +312,15 @@ type Stream struct {
 func ParseStream(s string) (Stream, error) {
 	sides := strings.Split(s, ",")
 	if len(sides) != 2 {
-		return Stream{}, fmt.Errorf("malformed stream %q", s)
+		return Stream{}, fmt.Errorf("malformed stream: %v", s)
 	}
 
-	listenNetwork, listenAddr, err := parseAddr(sides[0])
+	listenNetwork, listenAddr, err := parseStreamSide(sides[0])
 	if err != nil {
 		return Stream{}, fmt.Errorf("malformed listen side %q: %w", sides[0], err)
 	}
 
-	dialNetwork, dialAddr, err := parseAddr(sides[1])
+	dialNetwork, dialAddr, err := parseStreamSide(sides[1])
 	if err != nil {
 		return Stream{}, fmt.Errorf("malformed dial side %q: %w", sides[1], err)
 	}
@@ -268,10 +335,11 @@ func ParseStream(s string) (Stream, error) {
 	return stream, nil
 }
 
-func parseAddr(s string) (network, addr string, err error) {
+// parseStreamSide parses one side of a stream string.
+func parseStreamSide(s string) (network, addr string, err error) {
 	i := strings.Index(s, ":")
 	if i < 0 {
-		return "", "", fmt.Errorf("malformed address")
+		return "", "", errors.New("malformed address")
 	}
 
 	network = s[:i]

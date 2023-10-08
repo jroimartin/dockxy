@@ -36,19 +36,27 @@ func TestGroup_ListenAndServe(t *testing.T) {
 	}
 
 	pg := NewGroup()
-	evc, errc := pg.ListenAndServe(streams...)
+	batch := pg.ListenAndServe(streams...)
+	defer batch.Flush()
+	defer pg.Close()
 
 	pgStreams := make(map[string]string)
 	n := nproxies
-	for ev := range evc {
-		if ev.Kind != KindBeforeAccept {
-			continue
-		}
-		stream := ev.Data.(Stream)
-		pgStreams[stream.DialAddr] = stream.ListenAddr
-		n--
-		if n == 0 {
-			break
+loop:
+	for {
+		select {
+		case ev := <-batch.Events():
+			if ev.Kind != KindBeforeAccept {
+				continue
+			}
+			stream := ev.Data.(Stream)
+			pgStreams[stream.DialAddr] = stream.ListenAddr
+			n--
+			if n == 0 {
+				break loop
+			}
+		case err := <-batch.Errors():
+			t.Fatalf("unexpected error: %v", err)
 		}
 	}
 
@@ -78,7 +86,7 @@ func TestGroup_ListenAndServe(t *testing.T) {
 		t.Errorf("unexpected error: %v", err)
 	}
 
-	checkErrs(t, errc, ErrGroupClosed, 1)
+	checkErrors(t, batch.Errors(), ErrGroupClosed, 1)
 }
 
 func TestGroup_ListenAndServe_multiple_calls(t *testing.T) {
@@ -108,32 +116,40 @@ func TestGroup_ListenAndServe_multiple_calls(t *testing.T) {
 	}
 
 	pg := NewGroup()
+	defer pg.Close()
 
 	var wg sync.WaitGroup
 	errcMux := make(chan error)
 	pgStreams := make(map[string]string)
 	for i := 0; i < nproxies; i += batchsz {
 		sz := min(batchsz, len(streams)-i)
-		batch := streams[i : i+sz]
+		batch := pg.ListenAndServe(streams[i : i+sz]...)
+		defer batch.Flush()
+		defer pg.Close()
 
-		evc, errc := pg.ListenAndServe(batch...)
 		n := sz
-		for ev := range evc {
-			if ev.Kind != KindBeforeAccept {
-				continue
-			}
-			stream := ev.Data.(Stream)
-			pgStreams[stream.DialAddr] = stream.ListenAddr
-			n--
-			if n == 0 {
-				break
+	loop:
+		for {
+			select {
+			case ev := <-batch.Events():
+				if ev.Kind != KindBeforeAccept {
+					continue
+				}
+				stream := ev.Data.(Stream)
+				pgStreams[stream.DialAddr] = stream.ListenAddr
+				n--
+				if n == 0 {
+					break loop
+				}
+			case err := <-batch.Errors():
+				t.Fatalf("unexpected error: %v", err)
 			}
 		}
 
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for err := range errc {
+			for err := range batch.Errors() {
 				errcMux <- err
 			}
 		}()
@@ -169,7 +185,7 @@ func TestGroup_ListenAndServe_multiple_calls(t *testing.T) {
 		t.Errorf("unexpected error: %v", err)
 	}
 
-	checkErrs(t, errcMux, ErrGroupClosed, (nproxies+batchsz-1)/batchsz)
+	checkErrors(t, errcMux, ErrGroupClosed, (nproxies+batchsz-1)/batchsz)
 }
 
 func TestGroup_ListenAndServe_multiple_calls_one_stream(t *testing.T) {
@@ -190,31 +206,50 @@ func TestGroup_ListenAndServe_multiple_calls_one_stream(t *testing.T) {
 	}
 
 	pg := NewGroup()
+	defer pg.Close()
 
 	var wg sync.WaitGroup
 	evcMux := make(chan Event)
 	errcMux := make(chan error)
 	for i := 0; i < ncalls; i++ {
-		evc, errc := pg.ListenAndServe(stream)
+		batch := pg.ListenAndServe(stream)
+		defer batch.Flush()
+		defer pg.Close()
+
+		wg.Add(2)
 		go func() {
-			for ev := range evc {
+			defer wg.Done()
+			for ev := range batch.Events() {
 				evcMux <- ev
 			}
 		}()
-		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for err := range errc {
+			for err := range batch.Errors() {
 				errcMux <- err
 			}
 		}()
 	}
 	go func() {
 		wg.Wait()
+		close(evcMux)
 		close(errcMux)
 	}()
 
-	waitBeforeAccept(evcMux, 1)
+	for nevs, nerrs := 0, 0; nevs < 1 || nerrs < ncalls-1; {
+		select {
+		case ev := <-evcMux:
+			if ev.Kind == KindBeforeAccept {
+				nevs++
+			}
+		case err := <-errcMux:
+			if !errors.Is(err, ErrDuplicatedStream) {
+				t.Errorf("unexpected error: got: %v, want: %v", err, ErrDuplicatedStream)
+			} else {
+				nerrs++
+			}
+		}
+	}
 
 	resp, err := http.Get(ts.URL)
 	if err != nil {
@@ -235,41 +270,45 @@ func TestGroup_ListenAndServe_multiple_calls_one_stream(t *testing.T) {
 		t.Errorf("unexpected response: got: %s, want: %s", got, want)
 	}
 
-	for i := 0; i < ncalls-1; i++ {
-		if !errors.Is(<-errcMux, ErrDuplicatedStream) {
-			t.Errorf("unexpected error: got: %v, want: %v", err, ErrDuplicatedStream)
-		}
-	}
-
 	if err := pg.Close(); err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
 
-	checkErrs(t, errcMux, ErrGroupClosed, 1)
+	for err := range errcMux {
+		if !errors.Is(err, ErrGroupClosed) {
+			t.Errorf("unexpected error: got: %v, want: %v", err, ErrGroupClosed)
+		}
+	}
+
+	if ev, ok := <-evcMux; ok {
+		t.Errorf("events channel should be closed: got: %v", ev)
+	}
 }
 
 func TestGroup_ListenAndServe_no_streams(t *testing.T) {
 	pg := NewGroup()
-	_, errc := pg.ListenAndServe()
+	batch := pg.ListenAndServe()
+	defer batch.Flush()
+	defer pg.Close()
 
-	err, ok := <-errc
-	if ok {
-		t.Errorf("channel should be closed")
+	if err, ok := <-batch.Errors(); ok {
+		t.Errorf("errors channel should be closed: got: %v", err)
 	}
-	if err != nil {
-		t.Errorf("unexpected error: %v", err)
+
+	if ev, ok := <-batch.Events(); ok {
+		t.Errorf("events channel should be closed: got: %v", ev)
 	}
 
 	if err := pg.Close(); err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
 
-	err, ok = <-errc
-	if ok {
-		t.Errorf("channel should be closed")
+	if err, ok := <-batch.Errors(); ok {
+		t.Errorf("errors channel should be closed: got: %v", err)
 	}
-	if err != nil {
-		t.Errorf("unexpected error: %v", err)
+
+	if ev, ok := <-batch.Events(); ok {
+		t.Errorf("events channel should be closed: got: %v", ev)
 	}
 }
 
@@ -280,19 +319,23 @@ func TestGroup_ListenAndServe_after_close(t *testing.T) {
 	}
 
 	pg := NewGroup()
-	evc, errc := pg.ListenAndServe(stream)
+	batch := pg.ListenAndServe(stream)
+	defer batch.Flush()
+	defer pg.Close()
 
-	waitBeforeAccept(evc, 1)
+	waitBeforeAccept(t, batch, 1)
 
 	if err := pg.Close(); err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
 
-	checkErrs(t, errc, ErrGroupClosed, 1)
+	checkErrors(t, batch.Errors(), ErrGroupClosed, 1)
 
-	_, errc = pg.ListenAndServe(stream)
+	batch = pg.ListenAndServe(stream)
+	defer batch.Flush()
+	defer pg.Close()
 
-	checkErrs(t, errc, ErrGroupClosed, 1)
+	checkErrors(t, batch.Errors(), ErrGroupClosed, 1)
 }
 
 func TestGroup_ListenAndServe_duplicated_stream(t *testing.T) {
@@ -306,20 +349,30 @@ func TestGroup_ListenAndServe_duplicated_stream(t *testing.T) {
 	}
 
 	pg := NewGroup()
+	batch := pg.ListenAndServe(stream1, stream2, stream1)
+	defer batch.Flush()
+	defer pg.Close()
 
-	evc, errc := pg.ListenAndServe(stream1, stream2, stream1)
-
-	waitBeforeAccept(evc, 2)
-
-	if err := <-errc; !errors.Is(err, ErrDuplicatedStream) {
-		t.Errorf("unexpected error: got: %v, want: %v", err, ErrDuplicatedStream)
+	for nevs, nerrs := 0, 0; nevs < 2 || nerrs < 1; {
+		select {
+		case ev := <-batch.Events():
+			if ev.Kind == KindBeforeAccept {
+				nevs++
+			}
+		case err := <-batch.Errors():
+			if !errors.Is(err, ErrDuplicatedStream) {
+				t.Errorf("unexpected error: got: %v, want: %v", err, ErrDuplicatedStream)
+			} else {
+				nerrs++
+			}
+		}
 	}
 
 	if err := pg.Close(); err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
 
-	checkErrs(t, errc, ErrGroupClosed, 1)
+	checkErrors(t, batch.Errors(), ErrGroupClosed, 1)
 }
 
 func TestGroup_ListenAndServe_duplicated_listener(t *testing.T) {
@@ -329,13 +382,21 @@ func TestGroup_ListenAndServe_duplicated_listener(t *testing.T) {
 	}
 
 	pg := NewGroup()
-	evc, errc := pg.ListenAndServe(stream)
+	batch := pg.ListenAndServe(stream)
+	defer batch.Flush()
+	defer pg.Close()
 
 	var listenAddr string
-	for ev := range evc {
-		if ev.Kind == KindBeforeAccept {
-			listenAddr = ev.Data.(Stream).ListenAddr
-			break
+loop:
+	for {
+		select {
+		case ev := <-batch.Events():
+			if ev.Kind == KindBeforeAccept {
+				listenAddr = ev.Data.(Stream).ListenAddr
+				break loop
+			}
+		case err := <-batch.Errors():
+			t.Fatalf("unexpected error: %v", err)
 		}
 	}
 
@@ -344,7 +405,11 @@ func TestGroup_ListenAndServe_duplicated_listener(t *testing.T) {
 		t.Fatalf("could not parse stream: %v", err)
 	}
 
-	if _, errc := pg.ListenAndServe(stream); !errors.Is(<-errc, syscall.EADDRINUSE) {
+	batch2 := pg.ListenAndServe(stream)
+	defer batch2.Flush()
+	defer pg.Close()
+
+	if !errors.Is(<-batch2.Errors(), syscall.EADDRINUSE) {
 		t.Errorf("unexpected error: got: %v, want: %v", err, syscall.EADDRINUSE)
 	}
 
@@ -352,20 +417,103 @@ func TestGroup_ListenAndServe_duplicated_listener(t *testing.T) {
 		t.Errorf("unexpected error: %v", err)
 	}
 
-	checkErrs(t, errc, ErrGroupClosed, 1)
+	checkErrors(t, batch.Errors(), ErrGroupClosed, 1)
 }
 
 func TestGroup_Close_twice(t *testing.T) {
 	pg := NewGroup()
 
-	for i := 0; i < 2; i++ {
-		if err := pg.Close(); err != nil {
-			t.Errorf("unexpected error: %v", err)
+	if err := pg.Close(); err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+	if err := pg.Close(); !errors.Is(err, ErrGroupClosed) {
+		t.Errorf("unexpected error: got: %v, want: %v", err, ErrGroupClosed)
+	}
+}
+
+func TestGroup_Close_close_chans(t *testing.T) {
+	stream, err := ParseStream("tcp:127.0.0.1:0,tcp:127.0.0.1:1234")
+	if err != nil {
+		t.Fatalf("could not parse stream: %v", err)
+	}
+
+	pg := NewGroup()
+	batch := pg.ListenAndServe(stream)
+	defer batch.Flush()
+	defer pg.Close()
+
+	waitBeforeAccept(t, batch, 1)
+
+	if err := pg.Close(); err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	var nerr int
+loop:
+	for {
+		select {
+		case ev := <-batch.Events():
+			t.Errorf("unexpected event: %v", ev)
+		case err := <-batch.Errors():
+			if !errors.Is(err, ErrGroupClosed) {
+				t.Errorf("unexpected error: got: %v, want: %v", err, ErrGroupClosed)
+			}
+			nerr++
+		default:
+			break loop
+		}
+	}
+
+	if nerr > 1 {
+		t.Errorf("received more than one error: %v", nerr)
+	}
+}
+
+func TestBatch_Flush(t *testing.T) {
+	stream, err := ParseStream("tcp:127.0.0.1:0,tcp:127.0.0.1:1234")
+	if err != nil {
+		t.Fatalf("could not parse stream: %v", err)
+	}
+
+	pg := NewGroup()
+	batch := pg.ListenAndServe(stream)
+	defer batch.Flush()
+	defer pg.Close()
+
+	waitBeforeAccept(t, batch, 1)
+
+	if err := pg.Close(); err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	batch.Flush()
+
+	if _, ok := <-batch.Events(); ok {
+		t.Errorf("events channel should be closed")
+	}
+
+	if _, ok := <-batch.Errors(); ok {
+		t.Errorf("errors channel should be closed")
+	}
+}
+
+func waitBeforeAccept(t *testing.T, batch Batch, n int) {
+	for {
+		select {
+		case ev := <-batch.Events():
+			if ev.Kind == KindBeforeAccept {
+				n--
+			}
+			if n == 0 {
+				return
+			}
+		case err := <-batch.Errors():
+			t.Fatalf("unexpected error: %v", err)
 		}
 	}
 }
 
-func checkErrs(t *testing.T, errc <-chan error, wantErr error, wantN int) {
+func checkErrors(t *testing.T, errc <-chan error, wantErr error, wantN int) {
 	var n int
 	for err := range errc {
 		if !errors.Is(err, wantErr) {

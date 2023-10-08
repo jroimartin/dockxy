@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func TestProxy_ListenAndServe(t *testing.T) {
@@ -20,7 +21,9 @@ func TestProxy_ListenAndServe(t *testing.T) {
 	defer ts.Close()
 
 	tsAddr := ts.Listener.Addr()
-	p, addr, errc := newTestProxy("tcp", "127.0.0.1:0", tsAddr.Network(), tsAddr.String())
+	p, addr, errc := newTestProxy(t, "tcp", "127.0.0.1:0", tsAddr.Network(), tsAddr.String())
+	defer p.Flush()
+	defer p.Close()
 
 	resp, err := http.Get("http://" + addr)
 	if err != nil {
@@ -51,7 +54,9 @@ func TestProxy_ListenAndServe(t *testing.T) {
 }
 
 func TestProxy_ListenAndServe_twice(t *testing.T) {
-	p, _, errc := newTestProxy("tcp", "127.0.0.1:0", "tcp", "127.0.0.1:1234")
+	p, _, errc := newTestProxy(t, "tcp", "127.0.0.1:0", "tcp", "127.0.0.1:1234")
+	defer p.Flush()
+	defer p.Close()
 
 	if err := p.ListenAndServe("tcp", "127.0.0.1:0", "tcp", "127.0.0.1:1234"); !errors.Is(err, ErrProxyListener) {
 		t.Errorf("unexpected error: got: %v, want: %v", err, ErrProxyListener)
@@ -67,7 +72,8 @@ func TestProxy_ListenAndServe_twice(t *testing.T) {
 }
 
 func TestProxy_ListenAndServe_after_close(t *testing.T) {
-	p, _, errc := newTestProxy("tcp", "127.0.0.1:0", "tcp", "127.0.0.1:1234")
+	p, _, errc := newTestProxy(t, "tcp", "127.0.0.1:0", "tcp", "127.0.0.1:1234")
+	defer p.Flush()
 
 	if err := p.Close(); err != nil {
 		t.Errorf("unexpected error: %v", err)
@@ -84,8 +90,9 @@ func TestProxy_ListenAndServe_after_close(t *testing.T) {
 
 func TestProxy_ListenAndServe_after_close_without_listening(t *testing.T) {
 	p := NewProxy()
+	defer p.Flush()
 
-	if err := p.Close(); err != ErrProxyListener {
+	if err := p.Close(); !errors.Is(err, ErrProxyListener) {
 		t.Errorf("unexpected error: got: %v, want: %v", err, ErrProxyListener)
 	}
 
@@ -95,7 +102,8 @@ func TestProxy_ListenAndServe_after_close_without_listening(t *testing.T) {
 }
 
 func TestProxy_Serve_after_close(t *testing.T) {
-	p, _, errc := newTestProxy("tcp", "127.0.0.1:0", "tcp", "127.0.0.1:1234")
+	p, _, errc := newTestProxy(t, "tcp", "127.0.0.1:0", "tcp", "127.0.0.1:1234")
+	defer p.Flush()
 
 	if err := p.Close(); err != nil {
 		t.Errorf("unexpected error: %v", err)
@@ -112,6 +120,7 @@ func TestProxy_Serve_after_close(t *testing.T) {
 
 func TestProxy_Close_without_listening(t *testing.T) {
 	p := NewProxy()
+	defer p.Flush()
 
 	if err := p.Close(); err != ErrProxyListener {
 		t.Errorf("unexpected error: got: %v, want: %v", err, ErrProxyListener)
@@ -119,7 +128,8 @@ func TestProxy_Close_without_listening(t *testing.T) {
 }
 
 func TestProxy_Close_twice(t *testing.T) {
-	p, _, errc := newTestProxy("tcp", "127.0.0.1:0", "tcp", "127.0.0.1:1234")
+	p, _, errc := newTestProxy(t, "tcp", "127.0.0.1:0", "tcp", "127.0.0.1:1234")
+	defer p.Flush()
 
 	if err := p.Close(); err != nil {
 		t.Errorf("unexpected error: %v", err)
@@ -129,8 +139,63 @@ func TestProxy_Close_twice(t *testing.T) {
 		t.Errorf("unexpected error: got: %v, want: %v", err, ErrProxyClosed)
 	}
 
+	if err := p.Close(); !errors.Is(err, ErrProxyClosed) {
+		t.Errorf("unexpected error: got: %v, want: %v", err, ErrProxyClosed)
+	}
+}
+
+func TestProxy_Close_twice_without_listening(t *testing.T) {
+	p := NewProxy()
+	defer p.Flush()
+
 	if err := p.Close(); !errors.Is(err, ErrProxyListener) {
 		t.Errorf("unexpected error: got: %v, want: %v", err, ErrProxyListener)
+	}
+
+	if err := p.Close(); !errors.Is(err, ErrProxyClosed) {
+		t.Errorf("unexpected error: got: %v, want: %v", err, ErrProxyClosed)
+	}
+}
+
+func TestProxy_Close_close_events_chan(t *testing.T) {
+	p, _, errc := newTestProxyEvents(t, "tcp", "127.0.0.1:0")
+
+	if err := p.Close(); err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	if err := <-errc; !errors.Is(err, ErrProxyClosed) {
+		t.Errorf("unexpected error: got: %v, want: %v", err, ErrProxyClosed)
+	}
+
+	var n int
+	for ev := range p.Events() {
+		if ev.Kind != KindBeforeAccept {
+			t.Errorf("unexpected event: got: %v, want: %v", ev.Kind, KindBeforeAccept)
+		}
+		n++
+	}
+
+	if n != 1 {
+		t.Errorf("received multiple events: %v", n)
+	}
+}
+
+func TestProxy_Flush(t *testing.T) {
+	p, _, errc := newTestProxyEvents(t, "tcp", "127.0.0.1:0")
+
+	if err := p.Close(); err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	if err := <-errc; !errors.Is(err, ErrProxyClosed) {
+		t.Errorf("unexpected error: got: %v, want: %v", err, ErrProxyClosed)
+	}
+
+	p.Flush()
+
+	if _, ok := <-p.Events(); ok {
+		t.Errorf("events channel should be closed")
 	}
 }
 
@@ -199,30 +264,70 @@ func TestParseStream(t *testing.T) {
 	}
 }
 
-func newTestProxy(listenNetwork, listenAddr, dialNetwork, dialAddr string) (p *Proxy, addr string, errs <-chan error) {
-	errc := make(chan error)
-
+func newTestProxy(t *testing.T, listenNetwork, listenAddr, dialNetwork, dialAddr string) (p *Proxy, addr string, errs <-chan error) {
 	ln, err := net.Listen(listenNetwork, listenAddr)
 	if err != nil {
-		go func() { errc <- err }()
-		return nil, "", errc
+		t.Fatalf("unexpected error: %v", err)
 	}
 
 	p = NewProxy()
-	go func() { errc <- p.Serve(ln, dialNetwork, dialAddr) }()
 
-	waitBeforeAccept(p.Events(), 1)
+	errc := make(chan error)
+	go func() {
+		errc <- p.Serve(ln, dialNetwork, dialAddr)
+		close(errc)
+	}()
+
+loop:
+	for {
+		select {
+		case ev := <-p.Events():
+			if ev.Kind == KindBeforeAccept {
+				break loop
+			}
+		case err := <-errc:
+			p.Close()
+			p.Flush()
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
 
 	return p, ln.Addr().String(), errc
 }
 
-func waitBeforeAccept(events <-chan Event, n int) {
-	for ev := range events {
-		if ev.Kind == KindBeforeAccept {
-			n--
-		}
-		if n == 0 {
-			break
+func newTestProxyEvents(t *testing.T, listenNetwork, listenAddr string) (p *Proxy, addr string, errs <-chan error) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	p = NewProxy()
+
+	errc := make(chan error)
+	go func() {
+		errc <- p.Serve(ln, ts.Listener.Addr().Network(), ts.Listener.Addr().String())
+		close(errc)
+	}()
+
+	cli := &http.Client{Timeout: 5 * time.Millisecond}
+loop:
+	for {
+		select {
+		case <-time.After(5 * time.Millisecond):
+			if _, err := cli.Get("http://" + ln.Addr().String()); err == nil {
+				break loop
+			}
+		case err := <-errc:
+			p.Close()
+			p.Flush()
+			t.Fatalf("unexpected error: %v", err)
 		}
 	}
+
+	return p, ln.Addr().String(), errc
 }

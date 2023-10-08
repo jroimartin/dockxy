@@ -35,23 +35,27 @@ func TestRun(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	pg := proxy.NewGroup()
-
 	errc := make(chan error)
 	evc := make(chan proxy.Event)
-	go func() { errc <- run(ctx, pg, args, evc) }()
+	go func() { errc <- run(ctx, args, evc) }()
 
 	streams := make(map[string]string)
 	n := nproxies
-	for ev := range evc {
-		if ev.Kind != proxy.KindBeforeAccept {
-			continue
-		}
-		stream := ev.Data.(proxy.Stream)
-		streams[stream.DialAddr] = stream.ListenAddr
-		n--
-		if n == 0 {
-			break
+loop:
+	for {
+		select {
+		case ev := <-evc:
+			if ev.Kind != proxy.KindBeforeAccept {
+				continue
+			}
+			stream := ev.Data.(proxy.Stream)
+			streams[stream.DialAddr] = stream.ListenAddr
+			n--
+			if n == 0 {
+				break loop
+			}
+		case err := <-errc:
+			t.Fatalf("unexpected error: %v", err)
 		}
 	}
 
@@ -63,7 +67,7 @@ func TestRun(t *testing.T) {
 		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
-			t.Fatalf("unexpected status code: got: %v, want: 200", resp.StatusCode)
+			t.Errorf("unexpected status code: got: %v, want: 200", resp.StatusCode)
 		}
 
 		got, err := io.ReadAll(resp.Body)
@@ -85,7 +89,7 @@ func TestRun(t *testing.T) {
 }
 
 func TestRun_invalid_arg(t *testing.T) {
-	if err := run(context.Background(), nil, []string{"tcp::0"}, nil); err == nil {
-		t.Fatalf("run returned nil error")
+	if err := run(context.Background(), []string{"tcp::0"}, nil); err == nil {
+		t.Errorf("run returned nil error")
 	}
 }
