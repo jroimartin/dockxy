@@ -169,9 +169,10 @@ func (pg *Group) ListenAndServe(streams ...Stream) Batch {
 }
 
 // Close closes all the established data streams. After calling
-// [*Group.Close] all the events related to the [Batch]es returned by
-// [*Group.ListenAndServe] should be consumed to avoid leaking
-// resources. [Batch.Flush] is a helper for this.
+// [*Group.Close] all the events and errors related to the [Batch]'s
+// returned by successive calls to [*Group.ListenAndServe] should be
+// consumed to avoid leaking resources. [Batch.Flush] is a helper for
+// this.
 func (pg *Group) Close() error {
 	pg.mu.Lock()
 	defer pg.mu.Unlock()
