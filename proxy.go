@@ -80,7 +80,7 @@ func (p *Proxy) Serve(l net.Listener, dialNetwork, dialAddress string) error {
 	}
 	defer p.listenGroup.Done()
 
-	p.sendEvent(Event{
+	go p.sendEvent(Event{
 		Kind: KindBeforeAccept,
 		Data: Stream{
 			ListenNetwork: l.Addr().Network(),
@@ -228,6 +228,9 @@ func (p *Proxy) closeConn() {
 // closeEvents closes de events channel after all the events have been
 // consumed.
 func (p *Proxy) closeEvents() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
 	p.eventGroup.Wait()
 	close(p.evc)
 }
