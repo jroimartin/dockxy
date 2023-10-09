@@ -78,8 +78,6 @@ func (p *Proxy) Serve(l net.Listener, dialNetwork, dialAddress string) error {
 	if err := p.setListener(l); err != nil {
 		return fmt.Errorf("set listener: %w", err)
 	}
-
-	p.listenGroup.Add(1)
 	defer p.listenGroup.Done()
 
 	p.sendEvent(Event{
@@ -117,6 +115,7 @@ func (p *Proxy) setListener(l net.Listener) error {
 		return ErrProxyListener
 	}
 
+	p.listenGroup.Add(1)
 	p.listener = l
 	return nil
 }
