@@ -43,12 +43,16 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	if err := run(ctx, flag.Args(), nil); err != nil {
+	if err := run(ctx, flag.Args()); err != nil {
 		log.Fatalf("error: %v", err)
 	}
 }
 
-func run(ctx context.Context, args []string, events chan<- proxy.Event) error {
+// runEvents is set by tests to receive the events published by the
+// [proxy.Group] created by [run].
+var runEvents chan proxy.Event
+
+func run(ctx context.Context, args []string) error {
 	streams, err := parseArgs(args)
 	if err != nil {
 		return fmt.Errorf("parse arguments: %v", err)
@@ -59,6 +63,7 @@ func run(ctx context.Context, args []string, events chan<- proxy.Event) error {
 	defer batch.Flush()
 	defer pg.Close()
 
+	var closedEvc bool
 	for {
 		select {
 		case <-ctx.Done():
@@ -69,9 +74,16 @@ func run(ctx context.Context, args []string, events chan<- proxy.Event) error {
 				return fmt.Errorf("listen and serve: %v", err)
 			}
 			return nil
-		case ev := <-batch.Events():
-			if events != nil {
-				events <- ev
+		case ev, ok := <-batch.Events():
+			if runEvents == nil || closedEvc {
+				continue
+			}
+
+			if ok {
+				runEvents <- ev
+			} else {
+				close(runEvents)
+				closedEvc = true
 			}
 		case err := <-batch.Errors():
 			return fmt.Errorf("proxy group returned unexpectedly: %v", err)

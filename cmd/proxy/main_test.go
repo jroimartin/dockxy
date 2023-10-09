@@ -36,15 +36,19 @@ func TestRun(t *testing.T) {
 	defer cancel()
 
 	errc := make(chan error)
-	evc := make(chan proxy.Event)
-	go func() { errc <- run(ctx, args, evc) }()
+	runEvents = make(chan proxy.Event)
+	go func() { errc <- run(ctx, args) }()
 
 	streams := make(map[string]string)
 	n := nproxies
 loop:
 	for {
 		select {
-		case ev := <-evc:
+		case ev, ok := <-runEvents:
+			if !ok {
+				t.Fatal("events channel should be open")
+			}
+
 			if ev.Kind != proxy.KindBeforeAccept {
 				continue
 			}
@@ -89,7 +93,7 @@ loop:
 }
 
 func TestRun_invalid_arg(t *testing.T) {
-	if err := run(context.Background(), []string{"tcp::0"}, nil); err == nil {
+	if err := run(context.Background(), []string{"tcp::0"}); err == nil {
 		t.Errorf("run returned nil error")
 	}
 }

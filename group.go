@@ -229,16 +229,10 @@ func (b Batch) Errors() <-chan error {
 
 // Flush discards all the events and errors related to the [Batch].
 func (b Batch) Flush() {
-	for {
+	for okEvc, okErrc := true, true; okEvc || okErrc; {
 		select {
-		case _, ok := <-b.errc:
-			if !ok {
-				return
-			}
-		case _, ok := <-b.evc:
-			if !ok {
-				return
-			}
+		case _, okEvc = <-b.evc:
+		case _, okErrc = <-b.errc:
 		}
 	}
 }
