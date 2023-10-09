@@ -177,7 +177,7 @@ func TestProxy_Close_close_events_chan(t *testing.T) {
 	}
 
 	if n != 1 {
-		t.Errorf("received multiple events: %v", n)
+		t.Errorf("unexpected number of received events: got: %v, want: 1", n)
 	}
 }
 
@@ -270,7 +270,16 @@ func newTestProxy(t *testing.T, listenNetwork, listenAddr, dialNetwork, dialAddr
 		t.Fatalf("unexpected error: %v", err)
 	}
 
+	var reterr error
+
 	p = NewProxy()
+	defer func() {
+		if reterr != nil {
+			p.Close()
+			p.Flush()
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}()
 
 	errc := make(chan error)
 	go func() {
@@ -281,14 +290,22 @@ func newTestProxy(t *testing.T, listenNetwork, listenAddr, dialNetwork, dialAddr
 loop:
 	for {
 		select {
-		case ev := <-p.Events():
+		case ev, ok := <-p.Events():
+			if !ok {
+				reterr = errors.New("events channel should be open")
+				break loop
+			}
+
 			if ev.Kind == KindBeforeAccept {
 				break loop
 			}
-		case err := <-errc:
-			p.Close()
-			p.Flush()
-			t.Fatalf("unexpected error: %v", err)
+		case err, ok := <-errc:
+			if !ok {
+				reterr = errors.New("errors channel should be open")
+			} else {
+				reterr = fmt.Errorf("unexpected error: %v", err)
+			}
+			break loop
 		}
 	}
 
@@ -306,7 +323,16 @@ func newTestProxyEvents(t *testing.T, listenNetwork, listenAddr string) (p *Prox
 		t.Fatalf("unexpected error: %v", err)
 	}
 
+	var reterr error
+
 	p = NewProxy()
+	defer func() {
+		if reterr != nil {
+			p.Close()
+			p.Flush()
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}()
 
 	errc := make(chan error)
 	go func() {
@@ -322,10 +348,13 @@ loop:
 			if _, err := cli.Get("http://" + ln.Addr().String()); err == nil {
 				break loop
 			}
-		case err := <-errc:
-			p.Close()
-			p.Flush()
-			t.Fatalf("unexpected error: %v", err)
+		case err, ok := <-errc:
+			if !ok {
+				reterr = errors.New("errors channel should be open")
+			} else {
+				reterr = fmt.Errorf("unexpected error: %v", err)
+			}
+			break loop
 		}
 	}
 
