@@ -181,6 +181,26 @@ func TestProxy_Close_close_events_chan(t *testing.T) {
 	}
 }
 
+func TestProxy_Close_twice_pending_events(t *testing.T) {
+	p, _, errc := newTestProxyEvents(t, "tcp", "127.0.0.1:0")
+	defer p.Flush()
+
+	if err := p.Close(); err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+
+	// Make sure *Proxy.closeEvents locks Proxy.mu.
+	time.Sleep(1 * time.Millisecond)
+
+	if err := p.Close(); !errors.Is(err, ErrProxyClosed) {
+		t.Errorf("unexpected error: got: %v, want: %v", err, ErrProxyClosed)
+	}
+
+	if err := <-errc; !errors.Is(err, ErrProxyClosed) {
+		t.Errorf("unexpected error: got: %v, want: %v", err, ErrProxyClosed)
+	}
+}
+
 func TestProxy_Flush(t *testing.T) {
 	p, _, errc := newTestProxyEvents(t, "tcp", "127.0.0.1:0")
 

@@ -226,11 +226,9 @@ func (p *Proxy) closeConn() {
 }
 
 // closeEvents closes de events channel after all the events have been
-// consumed.
+// consumed. This function expects to run on a goroutine created from
+// [*Proxy.Close].
 func (p *Proxy) closeEvents() {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
 	p.eventGroup.Wait()
 	close(p.evc)
 }
